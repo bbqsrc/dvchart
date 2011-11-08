@@ -1,0 +1,1 @@
+var dvchart=dvchart||{};dvchart["smj-hu-regression-bugs"]=function(x){$.plot($(x),[{"color": "green", "data": [[1229644800000, 0], [1229644800000, 0]], "label": "Solved"}, {"color": "red", "data": [[1229644800000, 0], [1229644800000, 0]], "label": "Unsolved"}],{"series": {"lines": {"fill": true, "show": true}, "stack": true}, "xaxis": {"mode": "time"}});};

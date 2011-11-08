@@ -17,7 +17,9 @@ import xml.etree.ElementTree as etree
 
 
 NS = ''
-template = '$(document).ready(function(){{$.plot($("{query}"),{data},{config});}});'
+#template = '$(document).ready(function(){{$.plot($("{query}"),{data},{config});}});'
+template = 'var dvchart=dvchart||{{}};dvchart["{prop}"]=function(x){{$.plot($(x),{data},{config});}};'
+
 
 def convert_path_to_fn(path):
 	return "-".join(path.split('/')[:-1])
@@ -27,30 +29,33 @@ def get_date_in_ms(date, pattern="%Y%m%d"):
 	return calendar.timegm(time.strptime(date[:8], pattern)) * 1000
 
 
-def regression_graphs(root, dir, query):
+def regression_graphs(root, dir):
 	prefix = pjoin(dir, convert_path_to_fn(root.getchildren()[0].attrib['file']))
 
-	print("Generating", prefix + '-bugs.js')
-	f = open(prefix + '-bugs.js', 'w')
-	f.write(generate_regression_bugs_stacked(root, False, query))
+	name = prefix + '-bugs'
+	print("Generating", name+'.js')
+	f = open(name+'.js', 'w')
+	f.write(generate_regression_bugs_stacked(name.split('/')[-1], root, False))
 	f.close()
 	
-	print("Generating", prefix + '-bugs-percent.js')
-	f = open(prefix + '-bugs-percent.js', 'w')
-	f.write(generate_regression_bugs_stacked(root, True, query))
+	name = prefix + '-bugs-percent'
+	print("Generating", name+'.js')
+	f = open(name+'.js', 'w')
+	f.write(generate_regression_bugs_stacked(name.split('/')[-1], root, True))
 	f.close()
 
 
-def goldstandard_graphs(root, dir, query):
+def goldstandard_graphs(root, dir):
 	prefix = pjoin(dir, convert_path_to_fn(root.getchildren()[0].attrib['file']))
 
-	print("Generating", prefix + '-general.js')
-	f = open(prefix + '-general.js', 'w')
-	f.write(generate_goldstandard_general(root, query))
+	name = prefix + '-general'
+	print("Generating", name+'.js')
+	f = open(name+'.js', 'w')
+	f.write(generate_goldstandard_general(name.split('/')[-1], root))
 	f.close()
 	
 
-def generate_goldstandard_general(root, query="#flotchart"):
+def generate_goldstandard_general(name, root):
 	precision = {
 		"data": [],
 		"label": "Precision"
@@ -111,10 +116,10 @@ def generate_goldstandard_general(root, query="#flotchart"):
 	data = json.dumps([precision, recall, accuracy])
 	config = json.dumps(config)
 
-	return template.format(query=query, data=data, config=config)
+	return template.format(prop=name, data=data, config=config)
 
 
-def generate_regression_bugs_stacked(root, percentage=False, query="#flotchart"):
+def generate_regression_bugs_stacked(name, root, percentage=False):
 	solved = {
 		"data": [],
 		"color": "green",
@@ -173,7 +178,7 @@ def generate_regression_bugs_stacked(root, percentage=False, query="#flotchart")
 	data = json.dumps([solved, unsolved])
 	config = json.dumps(config)
 
-	return template.format(query=query, data=data, config=config)
+	return template.format(prop=name, data=data, config=config)
 
 
 flottypes = {
@@ -238,7 +243,7 @@ def GoldstandardDict(results):
 					dists[dist]['no-suggestions'] += 1
 			
 			elif pos > 5:
-				dists[dist]['less-than-5'] += 1
+				dists[dist]['lower-than-5'] += 1
 
 			else:
 				dists[dist][position] += 1
@@ -310,7 +315,7 @@ def generator_worker(inq, outq):
 			outq.put((arg, None))
 
 
-def generate_output(dir, query="#flotgraph"):
+def generate_output(dir):
 	olddir = os.getcwd()
 	parent = os.path.abspath(dir)
 
@@ -380,7 +385,7 @@ def generate_output(dir, query="#flotgraph"):
 	return stats
 
 
-def generate_js_from_xml(root, outdir, query):
+def generate_js_from_xml(root, outdir):
 	try: os.makedirs(outdir)
 	except: pass
 
@@ -389,7 +394,7 @@ def generate_js_from_xml(root, outdir, query):
 			for tests in speller.getchildren():
 				testtype = tests.attrib['value']
 				if testtype in flottypes:
-					flottypes[testtype](tests, outdir, query)
+					flottypes[testtype](tests, outdir)
 
 
 def test():
@@ -398,22 +403,18 @@ def test():
 	x = generate_output("/Users/brendan/Temporal/sjur")
 	end = datetime.datetime.now()
 	print("Time elapsed:", (end - start).total_seconds())
-	generate_js_from_xml(x, "/Users/brendan/git/spexml/jsout", "#flotchart")
+	generate_js_from_xml(x, "/Users/brendan/git/spexml/jsout")
 
 
 def cli():
 	if len(sys.argv) >= 3:
 		import datetime
 		
-		q = "#flotchart"
-		if len(sys.argv) >= 4:
-			q = sys.argv[3]
-
 		start = datetime.datetime.now()
 		x = generate_output(sys.argv[1])
 		end = datetime.datetime.now()
 		print("Time elapsed:", (end - start).total_seconds())
-		generate_js_from_xml(x, sys.argv[2], q)
+		generate_js_from_xml(x, sys.argv[2])
 	else:
 		print('Usage:', sys.argv[0], '[datadir]', '[jsdir]')
 
