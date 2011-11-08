@@ -1,18 +1,186 @@
-from xml.etree.ElementTree import Element, SubElement
+from collections import OrderedDict, Counter
+from copy import deepcopy
+from glob import glob
 from multiprocessing import Process, Queue, cpu_count
 from os.path import join as pjoin
 from queue import Empty
-from glob import glob
-from collections import OrderedDict, Counter
-from copy import deepcopy
+from xml.etree.ElementTree import Element, SubElement
 
-import xml.etree.ElementTree as etree
-import os, os.path
+import argparse
+import calendar
 import json
-import time
+import math
+import os, os.path
 import sys
+import time
+import xml.etree.ElementTree as etree
 
-import dvchart.flot as flot
+
+NS = ''
+template = '$(document).ready(function(){{$.plot($("{query}"),{data},{config});}});'
+
+def convert_path_to_fn(path):
+	return "-".join(path.split('/')[:-1])
+
+
+def get_date_in_ms(date, pattern="%Y%m%d"):
+	return calendar.timegm(time.strptime(date[:8], pattern)) * 1000
+
+
+def regression_graphs(root, dir, query):
+	prefix = pjoin(dir, convert_path_to_fn(root.getchildren()[0].attrib['file']))
+
+	print("Generating", prefix + '-bugs.js')
+	f = open(prefix + '-bugs.js', 'w')
+	f.write(generate_regression_bugs_stacked(root, False, query))
+	f.close()
+	
+	print("Generating", prefix + '-bugs-percent.js')
+	f = open(prefix + '-bugs-percent.js', 'w')
+	f.write(generate_regression_bugs_stacked(root, True, query))
+	f.close()
+
+
+def goldstandard_graphs(root, dir, query):
+	prefix = pjoin(dir, convert_path_to_fn(root.getchildren()[0].attrib['file']))
+
+	print("Generating", prefix + '-general.js')
+	f = open(prefix + '-general.js', 'w')
+	f.write(generate_goldstandard_general(root, query))
+	f.close()
+	
+
+def generate_goldstandard_general(root, query="#flotchart"):
+	precision = {
+		"data": [],
+		"label": "Precision"
+	}
+
+	recall = {
+		"data": [],
+		"label": "Recall"
+	}
+
+	accuracy = {
+		"data": [],
+		"label": "Accuracy"
+	}
+
+	config = {
+		"xaxis": {
+			"mode": "time"
+		},
+		"yaxis": {
+			"max": 100,
+			"min": 0
+		},
+		"series": {
+			"lines": {
+				"show": True,
+			}
+		}
+	}
+
+	for test in root.getiterator(NS + 'test'):
+		header = test.find("header")
+		date = get_date_in_ms(header.find("date").text.split('-')[0])
+		
+		words = int(test.find(NS + "words").text)
+		correct = int(test.find(NS + "correct").text)
+		false_correct = int(test.find(NS + "false-correct").text)
+		error = int(test.find(NS + "error").text)
+		false_error = int(test.find(NS + "false-error").text)
+	
+		if error + false_error != 0:
+			res = error / (error + false_error) * 100
+			precision['data'].append((date, res))
+
+		if error + false_correct != 0:
+			res = error / (error + false_correct) * 100
+			recall['data'].append((date, res))
+
+		if words != 0:
+			res = (error + correct) / words * 100
+			accuracy['data'].append((date, res))
+	
+
+	precision['data'].sort()
+	recall['data'].sort()
+	accuracy['data'].sort()
+
+	data = json.dumps([precision, recall, accuracy])
+	config = json.dumps(config)
+
+	return template.format(query=query, data=data, config=config)
+
+
+def generate_regression_bugs_stacked(root, percentage=False, query="#flotchart"):
+	solved = {
+		"data": [],
+		"color": "green",
+		"label": "Solved"
+	}
+	unsolved = {
+		"data": [],
+		"color": "red",
+		"label": "Unsolved"
+	}
+
+	config = {
+		"xaxis": {
+			"mode": "time"
+		},
+		"series": {
+			"stack": True,
+			"lines": {
+				"show": True,
+				"fill": True
+			}
+		}
+	}
+
+	if percentage:
+		config['yaxis'] = {'max': 100}
+
+	for test in root.getiterator(NS + 'test'):
+		header = test.find("header")
+		date = get_date_in_ms(header.find("date").text.split('-')[0])
+		
+		correct = int(test.find(NS + "correct").text)
+		false_correct = int(test.find(NS + "false-correct").text)
+		error = int(test.find(NS + "error").text)
+		false_error = int(test.find(NS + "false-error").text)
+	
+		if percentage:
+			total = correct + false_correct + error + false_error
+			if total != 0:	
+				correct = correct / total * 100
+				false_correct = false_correct / total * 100
+				error = error / total * 100
+				false_error = false_error / total * 100
+
+		solv = correct + error
+		unsolv = false_correct + false_error
+		
+		if percentage:
+			unsolv += 1 # make the line go away
+
+		solved['data'].append((date, solv))
+		unsolved['data'].append((date, unsolv))
+
+	solved['data'].sort()
+	unsolved['data'].sort()
+	data = json.dumps([solved, unsolved])
+	config = json.dumps(config)
+
+	return template.format(query=query, data=data, config=config)
+
+
+flottypes = {
+	"regression": regression_graphs,
+	"goldstandard": goldstandard_graphs
+}
+
 
 
 def GoldstandardDict(results):
@@ -142,12 +310,9 @@ def generator_worker(inq, outq):
 			outq.put((arg, None))
 
 
-def generate_output(dir, outdir, query="#flotgraph"):
+def generate_output(dir, query="#flotgraph"):
 	olddir = os.getcwd()
 	parent = os.path.abspath(dir)
-
-	try: os.makedirs(outdir)
-	except: pass
 
 	os.chdir(parent)
 	
@@ -216,22 +381,42 @@ def generate_output(dir, outdir, query="#flotgraph"):
 
 
 def generate_js_from_xml(root, outdir, query):
+	try: os.makedirs(outdir)
+	except: pass
+
 	for language in root.getchildren():
 		for speller in language.getchildren():
 			for tests in speller.getchildren():
 				testtype = tests.attrib['value']
-				if testtype in flot.testtypes:
-					flot.testtypes[testtype](tests, outdir, query)
-
+				if testtype in flottypes:
+					flottypes[testtype](tests, outdir, query)
 
 
 def test():
 	import datetime
 	start = datetime.datetime.now()
-	x = generate_output("/Users/brendan/Temporal/sjur", "/Users/brendan/git/dvchart/jsout")
+	x = generate_output("/Users/brendan/Temporal/sjur")
 	end = datetime.datetime.now()
 	print("Time elapsed:", (end - start).total_seconds())
 	generate_js_from_xml(x, "/Users/brendan/git/spexml/jsout", "#flotchart")
 
+
+def cli():
+	if len(sys.argv) >= 3:
+		import datetime
+		
+		q = "#flotchart"
+		if len(sys.argv) >= 4:
+			q = sys.argv[3]
+
+		start = datetime.datetime.now()
+		x = generate_output(sys.argv[1])
+		end = datetime.datetime.now()
+		print("Time elapsed:", (end - start).total_seconds())
+		generate_js_from_xml(x, sys.argv[2], q)
+	else:
+		print('Usage:', sys.argv[0], '[datadir]', '[jsdir]')
+
+
 if __name__ == "__main__":
-	test()
+	cli()
