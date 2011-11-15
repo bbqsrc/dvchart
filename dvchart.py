@@ -1,4 +1,4 @@
-from collections import OrderedDict, Counter
+from collections import OrderedDict, Counter, defaultdict
 from copy import deepcopy
 from glob import glob
 from multiprocessing import Process, Queue, cpu_count
@@ -15,10 +15,13 @@ import sys
 import time
 import xml.etree.ElementTree as etree
 
+__version__ = "0.1"
 
 NS = ''
-#template = '$(document).ready(function(){{$.plot($("{query}"),{data},{config});}});'
-template = 'var dvchart=dvchart||{{}};dvchart["{prop}"]=function(x){{$.plot($(x),{data},{config});}};'
+#templates['simple'] = '$(document).ready(function(){{$.plot($("{query}"),{data},{config});}});'
+templates = {
+	"simple": 'var dvchart=dvchart||{{}};dvchart["{prop}"]=function(x){{$.plot($(x),{data},{config});}};'
+}
 
 
 def convert_path_to_fn(path):
@@ -27,6 +30,13 @@ def convert_path_to_fn(path):
 
 def get_date_in_ms(date, pattern="%Y%m%d"):
 	return calendar.timegm(time.strptime(date[:8], pattern)) * 1000
+
+
+def get_positions(edit_dists):
+	c = Counter()
+	for pos in edit_dists.getiterator("position"):
+		c[pos.attrib['value']] += int(pos.text)
+	return c
 
 
 def regression_graphs(root, dir):
@@ -48,12 +58,67 @@ def regression_graphs(root, dir):
 def goldstandard_graphs(root, dir):
 	prefix = pjoin(dir, convert_path_to_fn(root.getchildren()[0].attrib['file']))
 
+	name = prefix + '-suggestions'
+	print("Generating", name+'.js')
+	f = open(name+'.js', 'w')
+	f.write(generate_goldstandard_suggestions(name.split('/')[-1], root))
+	f.close()
+	
 	name = prefix + '-general'
 	print("Generating", name+'.js')
 	f = open(name+'.js', 'w')
 	f.write(generate_goldstandard_general(name.split('/')[-1], root))
 	f.close()
 	
+
+def generate_goldstandard_suggestions(name, root):
+	pairs = (
+		("1", "#00FF00"),
+		("2", "#00DD00"),
+		("3", "#00BB00"),
+		("4", "#009900"),
+		("5", "yellow"),
+		("lower-than-5", "orange"),
+		("incorrect-only", "red"),
+		("no-suggestions", "pink")
+	)
+
+	config = {
+		"xaxis": {
+			"mode": "time"
+		},
+		"series": {
+			"stack": True,
+			"lines": {
+				"show": True,
+				"fill": True
+			}
+		}
+	}
+
+	out = defaultdict(list)
+	for test in root.getiterator(NS + 'test'):
+		header = test.find("header")
+		date = get_date_in_ms(header.find("date").text.split('-')[0])
+		
+		positions = get_positions(test.find('edit-dists'))
+
+		for k, v in positions.items():
+			out[k].append((date, v))
+
+	results = []
+	for label, colour in pairs:
+		o = OrderedDict()
+		o['label'] = label
+		o['color'] = colour
+		o['data'] = sorted(out.get(label, []))
+		results.append(o)
+
+	data = json.dumps(results)
+	config = json.dumps(config)
+
+	return templates['simple'].format(prop=name, data=data, config=config)
+
 
 def generate_goldstandard_general(name, root):
 	precision = {
@@ -116,7 +181,7 @@ def generate_goldstandard_general(name, root):
 	data = json.dumps([precision, recall, accuracy])
 	config = json.dumps(config)
 
-	return template.format(prop=name, data=data, config=config)
+	return templates['simple'].format(prop=name, data=data, config=config)
 
 
 def generate_regression_bugs_stacked(name, root, percentage=False):
@@ -178,7 +243,7 @@ def generate_regression_bugs_stacked(name, root, percentage=False):
 	data = json.dumps([solved, unsolved])
 	config = json.dumps(config)
 
-	return template.format(prop=name, data=data, config=config)
+	return templates['simple'].format(prop=name, data=data, config=config)
 
 
 flottypes = {
@@ -328,8 +393,10 @@ def generate_output(dir):
 	#stats = {}
 	if os.path.exists(pjoin(dir, 'aggregated.xml')):
 		stats = etree.parse(pjoin(dir, 'aggregated.xml')).getroot()
+		if stats.attrib.get("version") != __version__:
+			stats = Element("statistics", version=__version__)
 	else:
-		stats = Element("statistics")
+		stats = Element("statistics", version=__version__)
 	
 	existlist = []
 	for test in stats.findall('language/speller/tests/test'):
@@ -337,7 +404,8 @@ def generate_output(dir):
 
 	items = 0
 	for fn in filelist:
-		if fn not in existlist:
+		if fn not in existlist and not fn.startswith('latest') \
+		and not fn.startswith('previous'):
 			inq.put(fn)
 			items += 1
 	
