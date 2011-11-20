@@ -69,10 +69,27 @@ def goldstandard_graphs(root, dir):
 	f = open(name+'.js', 'w')
 	f.write(generate_goldstandard_general(name.split('/')[-1], root))
 	f.close()
+
+
+def typos_graphs(root, dir):
+	prefix = pjoin(dir, convert_path_to_fn(root.getchildren()[0].attrib['file']))
+
+	name = prefix + '-suggestions'
+	print("Generating", name+'.js')
+	f = open(name+'.js', 'w')
+	f.write(generate_goldstandard_suggestions(name.split('/')[-1], root, True))
+	f.close()
+	
+	name = prefix + '-general'
+	print("Generating", name+'.js')
+	f = open(name+'.js', 'w')
+	f.write(generate_goldstandard_general(name.split('/')[-1], root))
+	f.close()
 	
 
-def generate_goldstandard_suggestions(name, root):
-	pairs = (
+
+def generate_goldstandard_suggestions(name, root, typos=False):
+	pairs = [
 		("1", "#00FF00"),
 		("2", "#00DD00"),
 		("3", "#00BB00"),
@@ -81,7 +98,9 @@ def generate_goldstandard_suggestions(name, root):
 		("lower-than-5", "orange"),
 		("incorrect-only", "red"),
 		("no-suggestions", "pink")
-	)
+	]
+	if typos:
+		pairs.append(("false-errors", "black"))
 
 	config = {
 		"xaxis": {
@@ -96,7 +115,7 @@ def generate_goldstandard_suggestions(name, root):
 		}
 	}
 
-	out = defaultdict(list)
+	out = defaultdict(set)
 	for test in root.getiterator(NS + 'test'):
 		header = test.find("header")
 		date = get_date_in_ms(header.find("date").text.split('-')[0])
@@ -104,15 +123,20 @@ def generate_goldstandard_suggestions(name, root):
 		positions = get_positions(test.find('edit-dists'))
 
 		for k, v in positions.items():
-			out[k].append((date, v))
+			out[k].add((date, v))
+		
+		if typos:
+			false_errors = test.find("false-error").text
+			out['false-errors'].add((date, false_errors))
 
 	results = []
 	for label, colour in pairs:
 		o = OrderedDict()
 		o['label'] = label
 		o['color'] = colour
-		o['data'] = sorted(out.get(label, []))
-		results.append(o)
+		o['data'] = sorted(list(out.get(label, [])))
+		if len(o['data']) > 0:
+			results.append(o)
 
 	data = json.dumps(results)
 	config = json.dumps(config)
@@ -122,17 +146,17 @@ def generate_goldstandard_suggestions(name, root):
 
 def generate_goldstandard_general(name, root):
 	precision = {
-		"data": [],
+		"data": set(),
 		"label": "Precision"
 	}
 
 	recall = {
-		"data": [],
+		"data": set(),
 		"label": "Recall"
 	}
 
 	accuracy = {
-		"data": [],
+		"data": set(),
 		"label": "Accuracy"
 	}
 
@@ -163,20 +187,20 @@ def generate_goldstandard_general(name, root):
 	
 		if error + false_error != 0:
 			res = error / (error + false_error) * 100
-			precision['data'].append((date, res))
+			precision['data'].add((date, res))
 
 		if error + false_correct != 0:
 			res = error / (error + false_correct) * 100
-			recall['data'].append((date, res))
+			recall['data'].add((date, res))
 
 		if words != 0:
 			res = (error + correct) / words * 100
-			accuracy['data'].append((date, res))
+			accuracy['data'].add((date, res))
 	
 
-	precision['data'].sort()
-	recall['data'].sort()
-	accuracy['data'].sort()
+	precision['data'] = sorted(list(precision['data']))
+	recall['data'] = sorted(list(recall['data']))
+	accuracy['data'] = sorted(list(accuracy['data']))
 
 	data = json.dumps([precision, recall, accuracy])
 	config = json.dumps(config)
@@ -186,12 +210,12 @@ def generate_goldstandard_general(name, root):
 
 def generate_regression_bugs_stacked(name, root, percentage=False):
 	solved = {
-		"data": [],
+		"data": set(),
 		"color": "green",
 		"label": "Solved"
 	}
 	unsolved = {
-		"data": [],
+		"data": set(),
 		"color": "red",
 		"label": "Unsolved"
 	}
@@ -216,11 +240,17 @@ def generate_regression_bugs_stacked(name, root, percentage=False):
 		header = test.find("header")
 		date = get_date_in_ms(header.find("date").text.split('-')[0])
 		
-		correct = int(test.find(NS + "correct").text)
-		false_correct = int(test.find(NS + "false-correct").text)
-		error = int(test.find(NS + "error").text)
-		false_error = int(test.find(NS + "false-error").text)
-	
+		correct = 0
+		false_correct = 0
+		error = 0
+		false_error = 0
+
+		for bug in test.getiterator(NS + "bug"):
+			correct += int(bug.find(NS + "correct").text)
+			false_correct += int(bug.find(NS + "false-correct").text)
+			error += int(bug.find(NS + "error").text)
+			false_error += int(bug.find(NS + "false-error").text)
+		
 		if percentage:
 			total = correct + false_correct + error + false_error
 			if total != 0:	
@@ -235,11 +265,11 @@ def generate_regression_bugs_stacked(name, root, percentage=False):
 		if percentage:
 			unsolv += 1 # make the line go away
 
-		solved['data'].append((date, solv))
-		unsolved['data'].append((date, unsolv))
+		solved['data'].add((date, solv))
+		unsolved['data'].add((date, unsolv))
 
-	solved['data'].sort()
-	unsolved['data'].sort()
+	solved['data'] = sorted(list(solved['data']))
+	unsolved['data'] = sorted(list(unsolved['data']))
 	data = json.dumps([solved, unsolved])
 	config = json.dumps(config)
 
@@ -248,9 +278,84 @@ def generate_regression_bugs_stacked(name, root, percentage=False):
 
 flottypes = {
 	"regression": regression_graphs,
-	"goldstandard": goldstandard_graphs
+	"goldstandard": goldstandard_graphs,
+	"typos": typos_graphs
 }
 
+
+
+def RegressionDict(results):
+	c = {}
+	dists = {}
+	
+	for word in results.getiterator("word"):
+		bug = word.find("bug")
+		if bug is None:
+			continue
+		bug = bug.text
+		c[bug] = Counter()
+		c[bug]['edit-dists'] = {}
+		
+		state = None
+		
+		expected = word.find("expected")
+		status = word.find("status")
+		if status is not None:
+			status = status.text
+		
+		edit_dist = word.find("edit_dist")
+		if edit_dist is not None:
+			edit_dist = edit_dist.text
+
+		position = word.find("position")
+		if position is not None:
+			position = position.text
+		
+		suggestions = word.find("suggestions")
+		if suggestions is not None:
+			suggestions = int(suggestions.attrib.get("count"))
+
+
+		if expected is None and status == "SplErr":
+			state = "false-error"
+
+		elif expected is None and status == "SplCor":
+			state = "correct"
+
+		elif expected is not None and status == "SplCor":
+			state = "false-correct"
+
+		elif expected is not None and status == "SplErr":
+			state = "error"
+		
+		if state == "error":
+			if edit_dist is not None:
+				dist = edit_dist
+			else:
+				dist = '0'
+
+			if not c[bug]['edit-dists'].get(dist):
+				c[bug]['edit-dists'][dist] = Counter()
+			c[bug]['edit-dists'][dist]['@count'] += 1
+
+			pos = int(position)
+			if pos == 0:
+				if suggestions > 0:
+					c[bug]['edit-dists'][dist]['incorrect-only'] += 1
+				else:
+					c[bug]['edit-dists'][dist]['no-suggestions'] += 1
+			
+			elif pos > 5:
+				c[bug]['edit-dists'][dist]['lower-than-5'] += 1
+
+			else:
+				c[bug]['edit-dists'][dist][position] += 1
+
+		if state is not None:
+			c[bug][state] += 1
+		c[bug]['words'] += 1
+
+	return c
 
 
 def GoldstandardDict(results):
@@ -329,6 +434,41 @@ testtypes = {
 }
 '''
 
+def RegressionElement(fn):
+	root = etree.parse(fn).getroot()
+	header = root.find("header")
+	results = root.find("results")
+
+	if header is None or results is None:
+		return
+
+	c = RegressionDict(results)
+	stats_xml = Element("test", file=fn)
+	stats_xml.append(deepcopy(header))
+	
+	for bug, v in c.items():
+		bug_element = SubElement(stats_xml, "bug", id=bug)
+		SubElement(bug_element, "words").text = str(v['words'])
+		SubElement(bug_element, "correct").text = str(v['correct'])
+		SubElement(bug_element, "false-correct").text = str(v['false-correct'])
+		SubElement(bug_element, "error").text = str(v['error'])
+		SubElement(bug_element, "false-error").text = str(v['false-error'])
+		
+		distkeys = sorted(v['edit-dists'].keys(), key=str)
+		dists = SubElement(bug_element, "edit-dists")
+
+		for key in distkeys:
+			d = v['edit-dists'][key]
+			el = SubElement(dists, "edit-dist", count=str(d['@count']), value=key)
+	
+			poskeys = sorted(d.keys(), key=str)
+			poskeys.remove('@count')
+			for pkey in poskeys:
+				SubElement(el, 'position', value=str(pkey)).text = str(d[pkey])
+	
+	return stats_xml
+
+
 def TestElement(fn):
 	root = etree.parse(fn).getroot()
 	header = root.find("header")
@@ -364,7 +504,7 @@ def TestElement(fn):
 
 testtypes = {
 	"goldstandard": TestElement,
-	"regression": TestElement,
+	"regression": RegressionElement,
 	"typos": TestElement
 }
 
@@ -379,6 +519,49 @@ def generator_worker(inq, outq):
 		else:
 			outq.put((arg, None))
 
+def generate_test_html(dir):
+	tmpl = """<!DOCTYPE html>
+<html>
+<head>
+<title>dvchart test page</title>
+
+<style type="text/css">
+.chart {
+	height: 600px;
+	width: 800px;
+}
+</style>
+
+<script src="js/jquery-1.6.4.js" type="text/javascript"></script>
+<script src="js/jquery.flot.min.js" type="text/javascript"></script>
+<script src="js/jquery.flot.stack.min.js" type="text/javascript"></script>
+
+%s
+
+<script type="text/javascript">
+$(document).ready(function() {
+	for (var prop in dvchart) {
+		$("<h1>"+prop+"</h1>").appendTo($("#container"));
+		$("<div id='"+prop+"' class='chart'></div>").appendTo($("#container"));
+		dvchart[prop]('#'+prop);
+	}
+});
+</script>
+
+</head>
+<body>
+<div id='container'></div>
+</body>
+</html>
+"""
+	flist = []
+	for fn in os.listdir(dir):
+		flist.append("<script src='%s'></script>" % fn)
+	f = open(pjoin(dir, "index.html"), 'w')
+	f.write(tmpl % "\n".join(flist))
+	f.close()
+	print("Generated index.html")
+	
 
 def generate_output(dir):
 	olddir = os.getcwd()
@@ -404,8 +587,8 @@ def generate_output(dir):
 
 	items = 0
 	for fn in filelist:
-		if fn not in existlist and not fn.startswith('latest') \
-		and not fn.startswith('previous'):
+		if fn not in existlist and not 'latest' in fn\
+		and not 'previous' in fn:
 			inq.put(fn)
 			items += 1
 	
@@ -463,7 +646,7 @@ def generate_js_from_xml(root, outdir):
 				testtype = tests.attrib['value']
 				if testtype in flottypes:
 					flottypes[testtype](tests, outdir)
-
+	
 
 def test():
 	import datetime
@@ -483,6 +666,7 @@ def cli():
 		end = datetime.datetime.now()
 		print("Time elapsed:", (end - start).total_seconds())
 		generate_js_from_xml(x, sys.argv[2])
+		generate_test_html(sys.argv[2])
 	else:
 		print('Usage:', sys.argv[0], '[datadir]', '[jsdir]')
 
