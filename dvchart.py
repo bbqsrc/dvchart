@@ -38,6 +38,22 @@ def get_positions(edit_dists):
 	return c
 
 
+def get_state(expected, status):
+	state = None
+	if expected is None and status == "SplErr":
+		state = "false-error"
+
+	elif expected is None and status == "SplCor":
+		state = "correct"
+
+	elif expected is not None and status == "SplCor":
+		state = "false-correct"
+
+	elif expected is not None and status == "SplErr":
+		state = "error"
+	return state
+
+
 def regression_graphs(root, dir):
 	prefix = pjoin(dir, convert_path_to_fn(root.getchildren()[0].attrib['file']))
 
@@ -151,11 +167,11 @@ def generate_goldstandard_suggestions(name, root, typos=False, percentage=False)
 				total += int(v)
 			
 			for k, v in positions.items():
-				out[k].add((date, "%.2f" % int(v) / total * 100))
+				out[k].add((date, "%.2f" % (int(v) / total * 100)))
 			
 			if typos:
 				false_errors = test.find("false-error").text
-				out['false-errors'].add((date, "%.2f" % int(false_errors) / total * 100))
+				out['false-errors'].add((date, "%.2f" % (int(false_errors) / total * 100)))
 				
 
 	results = []
@@ -246,6 +262,13 @@ def generate_regression_bugs_stacked(name, root, percentage=False):
 		"color": "green",
 		"label": "Solved"
 	}
+
+	partly_solved = {
+		"data": set(),
+		"color": "orange",
+		"label": "Partially Solved"
+	}
+
 	unsolved = {
 		"data": set(),
 		"color": "red",
@@ -271,41 +294,89 @@ def generate_regression_bugs_stacked(name, root, percentage=False):
 	if percentage:
 		config['yaxis'] = {'max': 100}
 
+
 	for test in root.getiterator(NS + 'test'):
 		header = test.find("header")
 		date = get_date_in_ms(header.find("date").text.split('-')[0])
 		
+		'''
 		correct = 0
 		false_correct = 0
 		error = 0
 		false_error = 0
+		'''
+		bugs = Counter()
 
-		for bug in test.getiterator(NS + "bug"):
+		for bug in test.find('bugs').getiterator(NS + "bug"):
+			solved_node = bug.find("solved")
+			if solved_node is not None:
+				solved_node = int(solved_node.text)
+			else:
+				solved_node = 0
+			
+			unsolved_node = bug.find("unsolved")
+			if unsolved_node is not None:
+				unsolved_node = int(unsolved_node.text)
+			else:
+				unsolved_node = 0
+			
+			print(test.attrib['file'], bug.attrib['id'], solved_node, unsolved_node)
+			total = solved_node + unsolved_node
+			solved_pc = solved_node / total * 100
+			unsolved_pc = unsolved_node / total * 100
+
+			if solved_pc == 100:
+				bugs['solved'] += 1
+
+			elif solved_pc >= 80:
+				bugs['partial'] += 1
+
+			else:
+				bugs['unsolved'] += 1
+				
+			'''
 			correct += int(bug.find(NS + "correct").text)
 			false_correct += int(bug.find(NS + "false-correct").text)
 			error += int(bug.find(NS + "error").text)
 			false_error += int(bug.find(NS + "false-error").text)
+			'''
 		
+		print(list(bugs.values()))
+		if sum(bugs.values()) == 0:
+			continue
+
 		if percentage:
+			total = sum(bugs.values())
+			bugs['solved'] = "%.2f" % (bugs['solved'] / total * 100)
+			bugs['unsolved'] = "%.2f" % (bugs['unsolved'] / total * 100)
+			bugs['partial'] = "%.2f" % (bugs['partial'] / total * 100)
+
+			'''
 			total = correct + false_correct + error + false_error
 			if total != 0:	
 				correct = correct / total * 100
 				false_correct = false_correct / total * 100
 				error = error / total * 100
 				false_error = false_error / total * 100
-
+			'''
+	
+		'''
 		solv = correct + error
 		unsolv = false_correct + false_error
 		
 		if percentage:
 			unsolv += 1 # make the line go away
+		'''
 
-		solved['data'].add((date, solv))
-		unsolved['data'].add((date, unsolv))
+		solved['data'].add((date, bugs['solved']))
+		unsolved['data'].add((date, bugs['unsolved']))
+		partly_solved['data'].add((date, bugs['partial']))
 
 	solved['data'] = sorted(list(solved['data']))
 	unsolved['data'] = sorted(list(unsolved['data']))
-	data = json.dumps([solved, unsolved])
+	partly_solved['data'] = sorted(list(partly_solved['data']))
+	
+	data = json.dumps([solved, partly_solved, unsolved])
 	config = json.dumps(config)
 
 	return templates['simple'].format(prop=name, data=data, config=config)
@@ -327,17 +398,16 @@ def RegressionDict(results):
 		bug = word.find("bug")
 		if bug is None:
 			continue
-		bug = bug.text
-		c[bug] = Counter()
-		c[bug]['edit-dists'] = {}
 		
-		state = None
+		bug = bug.text
+		#c[bug]['edit-dists'] = {}
 		
 		expected = word.find("expected")
 		status = word.find("status")
 		if status is not None:
 			status = status.text
 		
+		'''
 		edit_dist = word.find("edit_dist")
 		if edit_dist is not None:
 			edit_dist = edit_dist.text
@@ -349,20 +419,21 @@ def RegressionDict(results):
 		suggestions = word.find("suggestions")
 		if suggestions is not None:
 			suggestions = int(suggestions.attrib.get("count"))
+		'''
 
-
-		if expected is None and status == "SplErr":
-			state = "false-error"
-
-		elif expected is None and status == "SplCor":
-			state = "correct"
-
-		elif expected is not None and status == "SplCor":
-			state = "false-correct"
-
-		elif expected is not None and status == "SplErr":
-			state = "error"
+		state = get_state(expected, status)
+		if state is None:
+			continue
 		
+		c[bug] = Counter()
+
+		if state.startswith("false"):
+			c[bug]['unsolved'] += 1
+
+		elif state in ("error", "correct"):
+			c[bug]['solved'] += 1
+
+		'''
 		if state == "error":
 			if edit_dist is not None:
 				dist = edit_dist
@@ -389,7 +460,7 @@ def RegressionDict(results):
 		if state is not None:
 			c[bug][state] += 1
 		c[bug]['words'] += 1
-
+		'''
 	return c
 
 
@@ -398,10 +469,8 @@ def GoldstandardDict(results):
 	dists = {}
 	
 	for word in results.getiterator("word"):
-		#print(word.getchildren())
-		state = None
-		
 		expected = word.find("expected")
+		
 		status = word.find("status")
 		if status is not None:
 			status = status.text
@@ -417,18 +486,8 @@ def GoldstandardDict(results):
 		suggestions = word.find("suggestions")
 		if suggestions is not None:
 			suggestions = int(suggestions.attrib.get("count"))
-
-		if expected is None and status == "SplErr":
-			state = "false-error"
-
-		elif expected is None and status == "SplCor":
-			state = "correct"
-
-		elif expected is not None and status == "SplCor":
-			state = "false-correct"
-
-		elif expected is not None and status == "SplErr":
-			state = "error"
+		
+		state = get_state(expected, status)
 		
 		if state == "error":
 			if edit_dist is not None:
@@ -481,14 +540,22 @@ def RegressionElement(fn):
 	stats_xml = Element("test", file=fn)
 	stats_xml.append(deepcopy(header))
 	
+	bugs_element = SubElement(stats_xml, "bugs")
 	for bug, v in c.items():
-		bug_element = SubElement(stats_xml, "bug", id=bug)
-		SubElement(bug_element, "words").text = str(v['words'])
-		SubElement(bug_element, "correct").text = str(v['correct'])
-		SubElement(bug_element, "false-correct").text = str(v['false-correct'])
-		SubElement(bug_element, "error").text = str(v['error'])
-		SubElement(bug_element, "false-error").text = str(v['false-error'])
+		# workaround a bug with the data itself (search 559)
+		if v['solved'] == v['unsolved'] == 0:
+			continue
 		
+		bug_element = SubElement(bugs_element, "bug", id=bug)
+		SubElement(bug_element, "solved").text = str(v['solved'])
+		SubElement(bug_element, "unsolved").text = str(v['unsolved'])
+		#SubElement(bug_element, "words").text = str(v['words'])
+		#SubElement(bug_element, "correct").text = str(v['correct'])
+		#SubElement(bug_element, "false-correct").text = str(v['false-correct'])
+		#SubElement(bug_element, "error").text = str(v['error'])
+		#SubElement(bug_element, "false-error").text = str(v['false-error'])
+		
+		'''
 		distkeys = sorted(v['edit-dists'].keys(), key=str)
 		dists = SubElement(bug_element, "edit-dists")
 
@@ -500,6 +567,7 @@ def RegressionElement(fn):
 			poskeys.remove('@count')
 			for pkey in poskeys:
 				SubElement(el, 'position', value=str(pkey)).text = str(d[pkey])
+		'''
 	
 	return stats_xml
 
