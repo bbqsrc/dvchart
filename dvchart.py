@@ -18,7 +18,6 @@ import xml.etree.ElementTree as etree
 __version__ = "0.1"
 
 NS = ''
-#templates['simple'] = '$(document).ready(function(){{$.plot($("{query}"),{data},{config});}});'
 templates = {
 	"simple": 'var dvchart=dvchart||{{}};dvchart["{prop}"]=function(x){{$.plot($(x),{data},{config});}};'
 }
@@ -58,6 +57,12 @@ def regression_graphs(root, dir):
 def goldstandard_graphs(root, dir):
 	prefix = pjoin(dir, convert_path_to_fn(root.getchildren()[0].attrib['file']))
 
+	name = prefix + '-suggestions-percentage'
+	print("Generating", name+'.js')
+	f = open(name+'.js', 'w')
+	f.write(generate_goldstandard_suggestions(name.split('/')[-1], root, percentage=True))
+	f.close()
+
 	name = prefix + '-suggestions'
 	print("Generating", name+'.js')
 	f = open(name+'.js', 'w')
@@ -80,29 +85,38 @@ def typos_graphs(root, dir):
 	f.write(generate_goldstandard_suggestions(name.split('/')[-1], root, True))
 	f.close()
 	
+	name = prefix + '-suggestions-percentage'
+	print("Generating", name+'.js')
+	f = open(name+'.js', 'w')
+	f.write(generate_goldstandard_suggestions(name.split('/')[-1], root, percentage=True))
+	f.close()
+	
 	name = prefix + '-general'
 	print("Generating", name+'.js')
 	f = open(name+'.js', 'w')
 	f.write(generate_goldstandard_general(name.split('/')[-1], root))
 	f.close()
-	
 
 
-def generate_goldstandard_suggestions(name, root, typos=False):
+def generate_goldstandard_suggestions(name, root, typos=False, percentage=False):
 	pairs = [
-		("1", "#00FF00"),
-		("2", "#00DD00"),
+		("1", "#007700"),
+		("2", "#009900"),
 		("3", "#00BB00"),
-		("4", "#009900"),
-		("5", "yellow"),
-		("lower-than-5", "orange"),
-		("incorrect-only", "red"),
-		("no-suggestions", "pink")
+		("4", "#00DD00"),
+		("5", "#00FF00"),
+		("lower-than-5", "yellow"),
+		("no-suggestions", "orange"),
+		("incorrect-only", "red")
 	]
+	
 	if typos:
 		pairs.append(("false-errors", "black"))
-
+	
 	config = {
+		"legend": {
+			"position": "nw"
+		},
 		"xaxis": {
 			"mode": "time"
 		},
@@ -114,6 +128,9 @@ def generate_goldstandard_suggestions(name, root, typos=False):
 			}
 		}
 	}
+	
+	if percentage:
+		config['yaxis'] = {'max': 100}
 
 	out = defaultdict(set)
 	for test in root.getiterator(NS + 'test'):
@@ -121,13 +138,25 @@ def generate_goldstandard_suggestions(name, root, typos=False):
 		date = get_date_in_ms(header.find("date").text.split('-')[0])
 		
 		positions = get_positions(test.find('edit-dists'))
-
-		for k, v in positions.items():
-			out[k].add((date, v))
+		if not percentage:
+			for k, v in positions.items():
+				out[k].add((date, v))
 		
-		if typos:
-			false_errors = test.find("false-error").text
-			out['false-errors'].add((date, false_errors))
+			if typos:
+				false_errors = test.find("false-error").text
+				out['false-errors'].add((date, false_errors))
+		else:
+			total = 0
+			for v in positions.values():
+				total += int(v)
+			
+			for k, v in positions.items():
+				out[k].add((date, "%.2f" % int(v) / total * 100))
+			
+			if typos:
+				false_errors = test.find("false-error").text
+				out['false-errors'].add((date, "%.2f" % int(false_errors) / total * 100))
+				
 
 	results = []
 	for label, colour in pairs:
@@ -161,6 +190,9 @@ def generate_goldstandard_general(name, root):
 	}
 
 	config = {
+		"legend": {
+			"position": "nw"
+		},
 		"xaxis": {
 			"mode": "time"
 		},
@@ -221,6 +253,9 @@ def generate_regression_bugs_stacked(name, root, percentage=False):
 	}
 
 	config = {
+		"legend": {
+			"position": "nw"
+		},
 		"xaxis": {
 			"mode": "time"
 		},
@@ -647,15 +682,6 @@ def generate_js_from_xml(root, outdir):
 				if testtype in flottypes:
 					flottypes[testtype](tests, outdir)
 	
-
-def test():
-	import datetime
-	start = datetime.datetime.now()
-	x = generate_output("/Users/brendan/Temporal/sjur")
-	end = datetime.datetime.now()
-	print("Time elapsed:", (end - start).total_seconds())
-	generate_js_from_xml(x, "/Users/brendan/git/spexml/jsout")
-
 
 def cli():
 	if len(sys.argv) >= 3:
