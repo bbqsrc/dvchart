@@ -320,7 +320,7 @@ def generate_regression_bugs_stacked(name, root, percentage=False):
 			else:
 				unsolved_node = 0
 			
-			print(test.attrib['file'], bug.attrib['id'], solved_node, unsolved_node)
+			#print(test.attrib['file'], bug.attrib['id'], solved_node, unsolved_node)
 			total = solved_node + unsolved_node
 			solved_pc = solved_node / total * 100
 			unsolved_pc = unsolved_node / total * 100
@@ -341,7 +341,7 @@ def generate_regression_bugs_stacked(name, root, percentage=False):
 			false_error += int(bug.find(NS + "false-error").text)
 			'''
 		
-		print(list(bugs.values()))
+		#print(list(bugs.values()))
 		if sum(bugs.values()) == 0:
 			continue
 
